@@ -46,32 +46,67 @@ class QAEngine:
         
         # 2. 分割文档
         print("\n✂️  分割文档...")
-        chunks = split_documents(documents)
-        print(f"   生成 {len(chunks)} 个文本块")
+        try:
+            chunks = split_documents(documents)
+            print(f"   生成 {len(chunks)} 个文本块")
+        except Exception as e:
+            print(f"   ❌ 分割文档失败: {e}")
+            import traceback
+            traceback.print_exc()
+            return {"success": False, "message": f"分割文档失败: {e}"}
         
-        # 3. 生成向量
+        # 3. 生成向量（分批处理避免内存溢出）
         print("\n🔢 生成向量...")
         texts = [chunk["chunk_text"] for chunk in chunks]
-        vectors = self.embedder.encode(texts, show_progress=True)
-        print(f"   向量维度: {vectors.shape[1]}")
         
-        # 4. 创建集合并插入数据
+        # 分批处理，每批 100 个文本块
+        batch_size = 100
+        all_vectors = []
+        vector_dim = None
+        
+        for i in range(0, len(texts), batch_size):
+            batch_texts = texts[i:i + batch_size]
+            print(f"   处理第 {i//batch_size + 1} 批 ({i+1}-{min(i+batch_size, len(texts))}/{len(texts)})")
+            batch_vectors = self.embedder.encode(batch_texts, show_progress=False)
+            all_vectors.extend(batch_vectors.tolist())
+            
+            if vector_dim is None:
+                vector_dim = batch_vectors.shape[1]
+        
+        print(f"   向量维度: {vector_dim}, 总数: {len(all_vectors)}")
+        
+        # 4. 创建集合
         print("\n💾 存储到向量数据库...")
         self.vector_store.create_collection(
-            dimension=vectors.shape[1],
+            dimension=vector_dim,
             recreate=recreate
         )
         
-        # 将 numpy 数组转换为列表
-        vectors_list = vectors.tolist()
-        ids = self.vector_store.insert(vectors_list, chunks)
-        print(f"   插入 {len(ids)} 条记录")
+        # 5. 分批插入数据（避免一次性插入过多数据）
+        total_inserted = 0
+        for i in range(0, len(all_vectors), batch_size):
+            batch_vectors = all_vectors[i:i + batch_size]
+            batch_chunks = chunks[i:i + batch_size]
+            
+            # 重新分配 ID
+            batch_chunks_with_id = []
+            for j, chunk in enumerate(batch_chunks):
+                batch_chunks_with_id.append({
+                    **chunk,
+                    "id": i + j
+                })
+            
+            ids = self.vector_store.insert(batch_vectors, batch_chunks_with_id)
+            total_inserted += len(ids)
+            print(f"   已插入 {total_inserted}/{len(all_vectors)} 条记录")
+        
+        print(f"✅ 索引建立完成！")
         
         return {
             "success": True,
             "total_files": file_stats["total_files"],
             "total_chunks": len(chunks),
-            "vector_dimension": vectors.shape[1]
+            "vector_dimension": vector_dim
         }
     
     def query(self, question: str, top_k: int = TOP_K) -> List[Dict]:

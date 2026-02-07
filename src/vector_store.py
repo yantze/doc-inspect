@@ -65,7 +65,7 @@ class VectorStore:
         
         Args:
             vectors: 向量列表
-            metadata: 元数据列表 [{chunk_text, source_file, file_path, chunk_index}]
+            metadata: 元数据列表 [{chunk_text, source_file, file_path, chunk_index, id}]
             
         Returns:
             插入的 ID 列表
@@ -74,9 +74,14 @@ class VectorStore:
         
         # 构建插入数据
         data = []
-        for i, (vector, meta) in enumerate(zip(vectors, metadata)):
+        for vector, meta in zip(vectors, metadata):
+            # 如果 metadata 中已经包含 id，使用它；否则自动生成
+            record_id = meta.get("id")
+            if record_id is None:
+                raise ValueError("metadata 中必须包含 'id' 字段")
+            
             data.append({
-                "id": i,
+                "id": record_id,
                 "vector": vector,
                 "text": meta["chunk_text"],
                 "source_file": meta["source_file"],
